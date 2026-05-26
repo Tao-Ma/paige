@@ -1,0 +1,142 @@
+[project]
+name = "paige"
+version = "0.1.0"
+description = "Message bridge between a code agent and people via IM."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Tao-Ma", email = "tao.ma.1984@gmail.com" },
+]
+keywords = ["claude-code", "feishu", "lark", "im-bridge", "tmux"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Software Development :: Bug Tracking",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "libtmux>=0.55",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "import-linter>=2.0",
+]
+feishu = [
+    "lark-oapi>=1.4",
+]
+screenshot = [
+    "pillow>=10",
+]
+voice = [
+    "httpx>=0.27",
+]
+
+[project.scripts]
+paige = "paige.entrypoint.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paige"]
+exclude = [
+    # paige.testing is the dev-only fakes package — it's used by
+    # tests + downstream consumers' tests, but it must never end
+    # up in a production wheel. Sealed off by import-linter too.
+    "src/paige/testing",
+]
+# Hatch excludes data files by default; opt fonts in.
+artifacts = [
+    "src/paige/infrastructure/fonts/*.ttf",
+]
+
+# ── tools ─────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+# Default `pytest` runs only fast unit tests. Integration / e2e are
+# opt-in via `pytest tests/integration` or `pytest tests/e2e`.
+testpaths = ["tests/unit"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+markers = [
+    "unit: fast — no I/O, no fakes-of-fakes, default `pytest` runs only these.",
+    "integration: real filesystem / libtmux. Slow, opt-in.",
+    "e2e: full pipeline with mock_claude. Slow, opt-in.",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B", "N"]  # tests can be sloppier with imports/names
+
+[tool.pyright]
+include = ["src/paige"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingImports = "error"
+
+# ── import-linter — enforce the layered architecture ──────────────────
+#
+# Lower layers don't know about higher ones. application + adapters are
+# siblings: neither imports the other. entrypoint is the only place
+# that may reach across all layers (composition root).
+
+[tool.importlinter]
+root_packages = ["paige"]
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+layers = [
+    "paige.entrypoint",
+    "paige.application | paige.adapters",
+    "paige.ports",
+    "paige.infrastructure",
+    "paige.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "application doesn't import adapters"
+type = "forbidden"
+source_modules = ["paige.application"]
+forbidden_modules = ["paige.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "adapters don't import application"
+type = "forbidden"
+source_modules = ["paige.adapters"]
+forbidden_modules = ["paige.application"]
+
+[[tool.importlinter.contracts]]
+name = "production code doesn't import paige.testing"
+type = "forbidden"
+source_modules = [
+    "paige.domain",
+    "paige.ports",
+    "paige.adapters",
+    "paige.application",
+    "paige.infrastructure",
+    "paige.entrypoint",
+]
+forbidden_modules = ["paige.testing"]

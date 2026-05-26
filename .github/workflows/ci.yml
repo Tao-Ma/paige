@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: lint + type + layers + tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          # No lockfile is tracked (uv.lock is gitignored), so key the
+          # cache off pyproject.toml instead of the default **/uv.lock —
+          # the default glob matches nothing and hard-errors.
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (including dev extras)
+        run: uv sync --all-extras --quiet
+
+      - name: ruff check
+        run: uv run ruff check src/ tests/
+
+      - name: ruff format (check only)
+        run: uv run ruff format --check src/ tests/
+
+      - name: pyright
+        run: uv run pyright src/paige/
+
+      - name: import-linter (layer contracts)
+        run: uv run lint-imports
+
+      - name: pytest (unit tests)
+        run: uv run pytest

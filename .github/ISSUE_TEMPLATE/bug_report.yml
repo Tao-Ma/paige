@@ -1,0 +1,64 @@
+name: Bug report
+description: paige is doing the wrong thing
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The most useful
+        thing you can include is the log window from
+        `~/.paige/paige.log` covering a few seconds around the bad
+        behaviour.
+  - type: input
+    id: version
+    attributes:
+      label: paige version
+      description: Output of `./scripts/prod.sh status` — the `wheel:` line.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: IM backend
+      options:
+        - Feishu (open.feishu.cn)
+        - Lark International (open.larksuite.com)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what did paige actually do.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: |
+        A window from `~/.paige/paige.log` covering the issue. Trim
+        anything sensitive (tokens, user_ids you don't want public).
+      render: text
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Host OS, Python version, tmux version, claude version.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Python: 3.12.3
+        tmux: 3.4
+        claude: 1.x.y

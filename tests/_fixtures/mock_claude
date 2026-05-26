@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""mock_claude — minimal Claude Code stand-in for paige e2e tests.
+
+Reads `JSONL_PATH` from env, holds a `~/.claude/tasks/<sid>/.lock`
+file open as an fd (the per-pid signal paige's discovery walks via
+`/proc/<pid>/fd/`), and on each line of stdin writes a user record +
+an assistant echo record into the JSONL. Renders a fake Claude Code
+TUI in the pane so the spinner parser sees something resembling the
+real layout.
+
+Run shape: `JSONL_PATH=<path> python mock_claude`. The tasks-dir
+lock fd lands at `~/.claude/tasks/<sid>/.lock` (basename of
+JSONL_PATH minus `.jsonl`). e2e tests override $HOME to keep this
+hermetic. Drives off stdin so the test (or a tmux pane) feeds it lines.
+
+**Rotation regression hook.** A stdin line equal to `__CLEAR__`
+simulates Claude Code's `/clear`: a new sessionId is generated and
+a new JSONL is opened. The original `~/.claude/tasks/<sid>/.lock`
+fd is *not* closed and *not* re-opened under a new sid — that
+matches real Claude Code 2.1.126+, which holds its boot-time lock
+fd open for the lifetime of the process and only rotates the JSONL
+filename on /clear. paige's discovery has to find the new sessionId
+by scanning project-dir JSONL mtimes, not by trusting the tasks-fd
+uuid alone (file-based introspection of the per-pid session file
+also doesn't work — `sessionId` there freezes at startup).
+
+Earlier revisions of mock_claude *did* rotate the lock fd, which
+matched the assumed behavior at the time but masked the real-claude
+shape and let the same "only Status & Approval reach Lark"
+regression slip through twice. Don't re-introduce lock-fd rotation
+without confirming live claude does the same.
+
+This is intentionally bare-bones: no tool_use mocking, no thinking
+blocks. Add capabilities to it as e2e tests demand them.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TextIO
+
+PROMPT = "> "
+THINKING_LINE = "✻ Thinking… (1s · 100 tokens)"
+CHROME = "─" * 32
+CLEAR_SENTINEL = "__CLEAR__"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _write_user(f: TextIO, text: str) -> None:
+    record = {
+        "type": "user",
+        "uuid": str(uuid.uuid4()),
+        "timestamp": _now(),
+        "message": {"role": "user", "content": text},
+    }
+    f.write(json.dumps(record) + "\n")
+
+
+def _write_assistant(f: TextIO, text: str) -> None:
+    record = {
+        "type": "assistant",
+        "uuid": str(uuid.uuid4()),
+        "timestamp": _now(),
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+    f.write(json.dumps(record) + "\n")
+
+
+def _open_tasks_lock(session_id: str) -> int:
+    """Open `~/.claude/tasks/<session_id>/.lock` and return the raw fd.
+
+    Mirrors real Claude Code 2.x — claude opens this once at process
+    start and holds the fd for the process lifetime. paige's discovery
+    walks `/proc/<pid>/fd` looking for a target containing
+    `/.claude/tasks/<UUID>/...`; the `.lock` file under the per-uuid
+    dir is what real Claude opens.
+
+    Returned as a raw fd (not a file object) — we never close it
+    explicitly; Python closes on process exit.
+    """
+    task_dir = Path.home() / ".claude" / "tasks" / session_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    lock = task_dir / ".lock"
+    lock.touch(exist_ok=True)
+    return os.open(str(lock), os.O_RDONLY)
+
+
+def _open_jsonl(jsonl_path: Path) -> TextIO:
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    return jsonl_path.open("a", buffering=1)
+
+
+def _rotate(
+    jsonl_f: TextIO,
+    *,
+    cwd: Path,
+    projects_root: Path,
+) -> tuple[TextIO, Path, str]:
+    """Simulate `/clear`: close the current JSONL, generate a new
+    sessionId, open the new JSONL. The boot-time lock fd is *kept* —
+    real Claude Code 2.1.126+ doesn't rotate it on /clear, and paige's
+    discovery has to handle that by scanning project-dir JSONL mtimes
+    instead of trusting the tasks-fd uuid.
+
+    Returns `(new_jsonl_file, new_jsonl_path, new_sid)`.
+    """
+    jsonl_f.close()
+    new_sid = str(uuid.uuid4())
+    new_jsonl_path = projects_root / _encode_cwd(cwd) / f"{new_sid}.jsonl"
+    new_f = _open_jsonl(new_jsonl_path)
+    return new_f, new_jsonl_path, new_sid
+
+
+def _encode_cwd(cwd: Path) -> str:
+    """Match `paige.infrastructure.transcript_path.encode_cwd` —
+    duplicated here so this fixture has zero paige imports."""
+    import re
+
+    return re.sub(r"[^a-zA-Z0-9-]", "-", str(cwd))
+
+
+def main() -> None:
+    jsonl_path = Path(os.environ["JSONL_PATH"])
+    cwd = Path.cwd()
+    projects_root = Path.home() / ".claude" / "projects"
+    current_sid = jsonl_path.stem
+
+    # Boot-time lock fd; intentionally not closed on /clear — see
+    # `_rotate` for why. We keep the binding so the GC doesn't reap it.
+    _lock_fd = _open_tasks_lock(current_sid)
+    f = _open_jsonl(jsonl_path)
+
+    sys.stdout.write(f"mock_claude ready — jsonl={jsonl_path}\n")
+    sys.stdout.write(f"{CHROME}\n{PROMPT}")
+    sys.stdout.flush()
+
+    for raw in sys.stdin:
+        text = raw.rstrip("\n")
+        if not text:
+            continue
+
+        if text == CLEAR_SENTINEL:
+            f, jsonl_path, current_sid = _rotate(
+                f,
+                cwd=cwd,
+                projects_root=projects_root,
+            )
+            sys.stdout.write(f"\n[/clear → new sid={current_sid}]\n{CHROME}\n{PROMPT}")
+            sys.stdout.flush()
+            continue
+
+        _write_user(f, text)
+
+        # Render the spinner so paige's terminal_parser sees it.
+        sys.stdout.write(f"\n{THINKING_LINE}\n{CHROME}\n{PROMPT}")
+        sys.stdout.flush()
+
+        time.sleep(0.05)
+        response = f"echo: {text}"
+        _write_assistant(f, response)
+
+        # Done thinking; render the response + a fresh prompt.
+        sys.stdout.write(f"\n{response}\n{CHROME}\n{PROMPT}")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

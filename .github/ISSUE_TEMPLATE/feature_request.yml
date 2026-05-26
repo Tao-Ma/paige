@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest an enhancement or new feature
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. To help us decide whether and how
+        to add this, please describe the **use case** before the
+        proposed solution — concrete use cases shape better
+        abstractions than features in the abstract.
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What are you trying to do that paige doesn't help with today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: |
+        Optional. If you have a concrete idea, describe it here.
+        Otherwise we'll work it out together.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, related tools, etc.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which layer would this likely touch?
+      description: Best guess; we'll confirm during triage.
+      options:
+        - New IM backend (adapter)
+        - New slash command (application)
+        - Domain model change
+        - Port change (cross-cutting)
+        - Operations / packaging
+        - Not sure
