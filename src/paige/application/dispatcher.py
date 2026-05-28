@@ -225,6 +225,12 @@ class Dispatcher:
                         header_title=header_title,
                         header_color=header_color,
                         is_status_carrier=True,
+                        # Auto-collapse is for bulky tool output (big
+                        # Write contents, long bash dumps), not Claude's
+                        # prose — folding a reply behind a tap-to-expand
+                        # header hurts readability. So text blocks render
+                        # flat; only tool_use args remain collapsible.
+                        force_no_collapse=not is_tool_use,
                     )
                 ),
             )

@@ -39,7 +39,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, cast
 
-from ...domain.card import ActionEvent
+from ...domain.card import ActionEvent, Card
 from ...domain.conversation import Anchor, Conversation
 from ...domain.inbound import Attachment, AttachmentKind, Inbound
 from ...domain.outbound import (
@@ -330,7 +330,7 @@ class FeishuChannel:
             post_content=to_post(text),
             reply_to_message_id=_thread_anchor(outbound),
         )
-        return self._anchor_from_response(outbound, response, "send")
+        return await self._anchor_from_response(outbound, response, "send")
 
     async def _send_card(self, outbound: Outbound, content: CardContent) -> Anchor | None:
         response = await self._client.create_card_message(
@@ -343,7 +343,7 @@ class FeishuChannel:
             ),
             reply_to_message_id=_thread_anchor(outbound),
         )
-        return self._anchor_from_response(outbound, response, "card send")
+        return await self._anchor_from_response(outbound, response, "card send")
 
     async def _send_document(self, outbound: Outbound, content: DocumentContent) -> Anchor | None:
         card_json = await self._document_card_json(
@@ -356,7 +356,7 @@ class FeishuChannel:
             card_content=card_json,
             reply_to_message_id=_thread_anchor(outbound),
         )
-        return self._anchor_from_response(outbound, response, "document send")
+        return await self._anchor_from_response(outbound, response, "document send")
 
     async def _document_card_json(
         self,
@@ -394,8 +394,8 @@ class FeishuChannel:
             alt=content.filename,
         )
 
-    @staticmethod
-    def _anchor_from_response(
+    async def _anchor_from_response(
+        self,
         outbound: Outbound,
         response: FeishuResponse,
         what: str,
@@ -407,6 +407,7 @@ class FeishuChannel:
                 response.code,
                 response.msg,
             )
+            await self._send_error_card(outbound, what, response.code, response.msg)
             return None
         message_id = str(response.data.get("message_id", ""))
         if not message_id:
@@ -415,6 +416,51 @@ class FeishuChannel:
             conversation=outbound.conversation,
             message_id=message_id,
         )
+
+    async def _send_error_card(self, outbound: Outbound, what: str, code: int, msg: str) -> None:
+        """Surface a failed delivery to the chat instead of dropping it
+        silently. Lark rejecting a send (an unsupported card element, a
+        transient backend error) used to vanish with only a log line —
+        the user saw nothing. This posts a small red card carrying the
+        Feishu code + raw message so the failure is debuggable from the
+        chat itself.
+
+        Sent via a direct client call with a minimal, collapse-free,
+        table-free body so the error card can't trip the same card-parse
+        failure it's reporting (the raw message rides inside a fenced
+        code block to neutralise any brackets/markdown). If it *also*
+        fails we only log — no recursion back through
+        `_anchor_from_response`."""
+        detail = (msg or "(no message)")[:1500]
+        card = Card(
+            text=(
+                f"paige couldn't deliver a **{what}** to this chat.\n\n"
+                f"Feishu error code `{code}`. Raw response:\n\n"
+                f"```\n{detail}\n```"
+            ),
+            header_title="⚠️ Delivery failed",
+            header_color="red",
+            force_no_collapse=True,
+        )
+        try:
+            response = await self._client.create_card_message(
+                chat_id=outbound.conversation.chat_id,
+                card_content=to_card(
+                    card,
+                    thread_id=outbound.conversation.thread_id,
+                    topic_id=outbound.conversation.topic_id,
+                ),
+                reply_to_message_id=_thread_anchor(outbound),
+            )
+        except Exception as e:  # never let the failure notifier raise
+            logger.exception("error-card send raised: %s", e)
+            return
+        if not response.ok:
+            logger.error(
+                "error-card send also failed code=%d msg=%s",
+                response.code,
+                response.msg,
+            )
 
     def _should_drop_group_message(self, event: dict[str, Any]) -> bool:
         """Drop group-chat messages that don't @-mention this bot.

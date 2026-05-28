@@ -187,7 +187,19 @@ def _to_card_v2(
     """
     body = card.text or ""
     body_line_count = body.count("\n") + 1 if body else 0
-    if collapse_threshold_lines > 0 and body_line_count > collapse_threshold_lines:
+    # Lark rejects a `table` element nested inside a collapsible_panel
+    # body (code 200621 "type of element is not supported tag: table",
+    # surfaced as a 230099 card-parse failure) — the whole send fails
+    # and the message silently vanishes while the separate Ready card
+    # still lands. A `table` is fine at the top body level, so when the
+    # body carries one we skip the collapse and render inline. A long
+    # but visible message beats a dropped one.
+    has_table = any(el.get("tag") == "table" for el in body_elements)
+    if (
+        collapse_threshold_lines > 0
+        and body_line_count > collapse_threshold_lines
+        and not has_table
+    ):
         elements: list[CardJson] = [_collapsible_panel(body_elements, line_count=body_line_count)]
     else:
         elements = [*body_elements]

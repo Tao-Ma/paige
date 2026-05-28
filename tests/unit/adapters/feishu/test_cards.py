@@ -358,6 +358,21 @@ def test_collapsible_preserves_paragraph_split_inside_panel() -> None:
     assert any("para B" in c for c in inner_contents)
 
 
+def test_long_body_with_table_skips_collapse() -> None:
+    """Lark rejects a `table` nested inside a collapsible_panel
+    (code 200621), failing the whole send so the message vanishes.
+    When a long body carries a table we must render inline instead of
+    collapsing — a visible message beats a dropped one."""
+    body = (
+        "\n".join(f"line {i}" for i in range(120))
+        + "\n\n| Name | Cost |\n| --- | --- |\n| alpha | $1 |\n"
+    )
+    card_json = to_card(Card(text=body), collapse_threshold_lines=50)
+    tags = [e["tag"] for e in card_json["body"]["elements"]]
+    assert "collapsible_panel" not in tags
+    assert "table" in tags
+
+
 # ── GFM tables → Lark `table` element ────────────────────────────
 
 

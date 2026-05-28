@@ -200,6 +200,56 @@ async def test_text_event_enqueues_outbound_for_each_binding(harness) -> None:  
     assert convs == {CONV_A, CONV_B}
 
 
+async def test_text_block_opts_out_of_collapse(harness) -> None:  # type: ignore[no-untyped-def]
+    """Claude's prose must render flat — folding a reply behind a
+    tap-to-expand header hurts readability. Only bulky tool output
+    should auto-collapse."""
+    h = harness
+    h.mux.add_pane("@1", "p", Path("/p"))
+    await h.registry.bind(ALICE, CONV_A, "@1")
+    await h.registry.register_run("@1", "sid", Path("/p"))
+    h.watcher.track("sid", Path("/p/sid.jsonl"))
+
+    event = TranscriptEvent(
+        role=Role.ASSISTANT,
+        blocks=(Block(kind=BlockKind.TEXT, text="a long reply"),),
+    )
+    await h.watcher.feed("sid", event)
+    await h.outbox.stop()
+
+    sent = h.channel.sent[0]
+    assert isinstance(sent.content, CardContent)
+    assert sent.content.card.force_no_collapse is True
+
+
+async def test_tool_use_args_stay_collapsible(harness) -> None:  # type: ignore[no-untyped-def]
+    """Tool_use args (e.g. a big Write file body) can be bulky, so
+    they keep the collapse behaviour — the opt-out is text-only."""
+    h = harness
+    h.mux.add_pane("@1", "p", Path("/p"))
+    await h.registry.bind(ALICE, CONV_A, "@1")
+    await h.registry.register_run("@1", "sid", Path("/p"))
+    h.watcher.track("sid", Path("/p/sid.jsonl"))
+
+    event = TranscriptEvent(
+        role=Role.ASSISTANT,
+        blocks=(
+            Block(
+                kind=BlockKind.TOOL_USE,
+                text='{"command": "ls"}',
+                tool_id="t1",
+                tool_name="Bash",
+            ),
+        ),
+    )
+    await h.watcher.feed("sid", event)
+    await h.outbox.stop()
+
+    sent = h.channel.sent[0]
+    assert isinstance(sent.content, CardContent)
+    assert sent.content.card.force_no_collapse is False
+
+
 async def test_no_bindings_means_nothing_enqueued(harness) -> None:  # type: ignore[no-untyped-def]
     h = harness
     h.watcher.track("sid", Path("/p/sid.jsonl"))

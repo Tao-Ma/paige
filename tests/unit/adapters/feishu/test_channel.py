@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 
 from paige.adapters.feishu.channel import FeishuChannel
-from paige.adapters.feishu.client import FeishuClient
-from paige.domain.card import ActionEvent
+from paige.adapters.feishu.client import FeishuClient, FeishuResponse
+from paige.domain.card import ActionEvent, Card
 from paige.domain.conversation import Anchor, Conversation
 from paige.domain.inbound import Attachment, AttachmentKind, Inbound
 from paige.domain.outbound import (
@@ -118,6 +118,43 @@ async def test_send_text_failure_returns_none() -> None:
     channel = FeishuChannel(client=client)
     anchor = await channel.send(Outbound(conversation=CONV, content=TextContent("x")))
     assert anchor is None
+
+
+async def test_send_card_failure_posts_error_card() -> None:
+    """A rejected card send must not vanish silently — the channel
+    posts a red error card carrying the Feishu code + raw message so
+    the failure is visible and debuggable from the chat itself."""
+    client = FakeFeishuClient()
+    client.code_next["create_card_message"] = 230099  # card-parse failure
+    channel = FeishuChannel(client=client)
+    anchor = await channel.send(
+        Outbound(conversation=CONV, content=CardContent(card=Card(text="hi")))
+    )
+    assert anchor is None
+    # Two card calls: the original (failed) + the error notification.
+    assert len(client.created_cards) == 2
+    err = client.created_cards[1].card_content
+    assert "Delivery failed" in err["header"]["title"]["content"]
+    # The Feishu code rides in the body for debugging.
+    assert "230099" in json.dumps(err)
+
+
+async def test_error_card_failure_does_not_recurse() -> None:
+    """If the error card *also* fails to send we only log — it must
+    not trigger another error card (the notifier sends directly, not
+    through `_anchor_from_response`), so no infinite recursion."""
+
+    class AlwaysFailCards(FakeFeishuClient):
+        async def create_card_message(self, **kw: Any) -> FeishuResponse:
+            await super().create_card_message(**kw)  # record the call
+            return FeishuResponse(code=230099, msg="boom", data={})
+
+    client = AlwaysFailCards()
+    channel = FeishuChannel(client=client)
+    await channel.send(Outbound(conversation=CONV, content=CardContent(card=Card(text="hi"))))
+    # Exactly two: the original failed send + one error card. The
+    # error card's own failure stops at the log — no third attempt.
+    assert len(client.created_cards) == 2
 
 
 async def test_send_typing_returns_none_no_call() -> None:
